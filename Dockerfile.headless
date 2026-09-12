@@ -1,0 +1,35 @@
+FROM ubuntu:20.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgtk-3-0 \
+        libasound2 \
+        libpulse0 \
+        libgstreamer1.0-0 \
+        libgstreamer-plugins-base1.0-0 \
+        libxcb-randr0 \
+        libxcb-shape0 \
+        libxcb-xfixes0 \
+        libxfixes3 \
+        libxdo4 \
+        libva2 \
+        libvdpau1 \
+        libunwind8 \
+        xvfb \
+        x11-utils \
+        ca-certificates \
+        procps \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/lib/rustdesk
+COPY rustdesk-headless /usr/lib/rustdesk/rustdesk
+RUN chmod +x /usr/lib/rustdesk/rustdesk
+
+VOLUME ["/root/.config/RustDesk"]
+
+COPY entrypoint-headless.sh /usr/lib/rustdesk/entrypoint.sh
+RUN chmod +x /usr/lib/rustdesk/entrypoint.sh
+
+ENTRYPOINT ["/usr/lib/rustdesk/entrypoint.sh"]

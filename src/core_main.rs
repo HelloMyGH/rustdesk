@@ -47,6 +47,7 @@ pub fn core_main() -> Option<Vec<String>> {
     let mut _is_quick_support = false;
     let mut _is_flutter_invoke_new_connection = false;
     let mut no_server = false;
+    let mut no_tray = false;
     let mut arg_exe = Default::default();
     for arg in std::env::args() {
         if i == 0 {
@@ -74,6 +75,8 @@ pub fn core_main() -> Option<Vec<String>> {
                 _is_quick_support = true;
             } else if arg == "--no-server" {
                 no_server = true;
+            } else if arg == "--no-tray" {
+                no_tray = true;
             } else {
                 args.push(arg);
             }
@@ -399,12 +402,14 @@ pub fn core_main() -> Option<Vec<String>> {
             #[cfg(target_os = "linux")]
             {
                 hbb_common::allow_err!(crate::platform::check_autostart_config());
-                std::process::Command::new("pkill")
-                    .arg("-f")
-                    .arg(&format!("{} --tray", crate::get_app_name().to_lowercase()))
-                    .status()
-                    .ok();
-                hbb_common::allow_err!(crate::run_me(vec!["--tray"]));
+                if !no_tray {
+                    std::process::Command::new("pkill")
+                        .arg("-f")
+                        .arg(&format!("{} --tray", crate::get_app_name().to_lowercase()))
+                        .status()
+                        .ok();
+                    hbb_common::allow_err!(crate::run_me(vec!["--tray"]));
+                }
             }
             #[cfg(windows)]
             crate::privacy_mode::restore_reg_connectivity(true, false);
