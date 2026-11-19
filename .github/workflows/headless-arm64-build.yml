@@ -1,0 +1,157 @@
+name: Headless Build ARM64
+
+env:
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - "src/**"
+      - "libs/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - ".github/workflows/headless-arm64-build.yml"
+
+jobs:
+  build:
+    name: headless-deb-arm64 (ubuntu-22.04-arm)
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 180
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Install prerequisites
+        shell: bash
+        run: |
+          sudo apt-get -y update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            curl \
+            dpkg-dev \
+            gcc \
+            git \
+            g++ \
+            libasound2-dev \
+            libunwind-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgtk-3-dev \
+            libpulse-dev \
+            libva-dev \
+            libvdpau-dev \
+            libxcb-randr0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxdo-dev \
+            libxfixes-dev \
+            nasm \
+            wget \
+            unzip \
+            zip
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+      - name: Install vcpkg dependencies
+        run: |
+          $VCPKG_ROOT/vcpkg install --x-install-root="$VCPKG_ROOT/installed"
+        shell: bash
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-unknown-linux-gnu
+          components: ''
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build (release, default features, no flutter)
+        uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1
+        with:
+          command: build
+          args: --release --locked --target=aarch64-unknown-linux-gnu --bin rustdesk
+
+      - name: Package deb
+        id: package
+        shell: bash
+        run: |
+          set -e
+          VERSION=$(awk -F'"' '/^version = / {print $2; exit}' Cargo.toml)
+          PKG_NAME="rustdesk_${VERSION}_arm64"
+
+          mkdir -p "${PKG_NAME}/DEBIAN"
+          mkdir -p "${PKG_NAME}/usr/share/rustdesk/files/systemd"
+
+          BIN="${PKG_NAME}/usr/share/rustdesk/rustdesk"
+          cp target/aarch64-unknown-linux-gnu/release/rustdesk "${BIN}"
+          strip "${BIN}"
+
+          cp res/rustdesk.service "${PKG_NAME}/usr/share/rustdesk/files/systemd/rustdesk.service"
+          cp res/DEBIAN/preinst res/DEBIAN/postinst res/DEBIAN/prerm res/DEBIAN/postrm "${PKG_NAME}/DEBIAN/"
+          chmod 0755 "${PKG_NAME}/DEBIAN/"{preinst,postinst,prerm,postrm}
+
+          DEPS=$(dpkg-shlibdeps -O --ignore-missing-info "${BIN}" 2>/dev/null | sed 's/^shlibs:Depends=//' || true)
+          if [ -z "${DEPS}" ]; then
+            DEPS="libc6, libgcc-s1, libasound2, libpulse0, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0, libgtk-3-0, libxdo3, libxcb-xfixes0, libxcb-randr0, libxcb-shape0, libxfixes3"
+          fi
+          INSTALLED_SIZE=$(du -ks "${PKG_NAME}" | cut -f1)
+
+          cat > "${PKG_NAME}/DEBIAN/control" <<EOF
+          Package: rustdesk
+          Version: ${VERSION}
+          Architecture: arm64
+          Maintainer: rustdesk <info@rustdesk.com>
+          Installed-Size: ${INSTALLED_SIZE}
+          Depends: ${DEPS}
+          Section: net
+          Priority: optional
+          Homepage: https://rustdesk.com
+          Description: RustDesk Remote Desktop (headless)
+          EOF
+
+          dpkg-deb --build -Zxz "${PKG_NAME}"
+          echo "DEB_PATH=${PKG_NAME}.deb" >> "$GITHUB_OUTPUT"
+
+      - name: Verify deb
+        shell: bash
+        run: |
+          dpkg-deb --info ${{ steps.package.outputs.DEB_PATH }}
+          dpkg-deb --contents ${{ steps.package.outputs.DEB_PATH }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@50769540e7f4fcdb2288f1e8fa6588514c8e9c47 # v4
+        with:
+          name: rustdesk-headless-arm64-deb
+          path: ${{ steps.package.outputs.DEB_PATH }}
+          retention-days: 30
